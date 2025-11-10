@@ -206,10 +206,11 @@ def create_summary_sheet(wb, summary_df, month_name, year):
     ws['A1'].fill = styles['title_fill']
     ws.merge_cells('A1:H1')
     ws['A1'].alignment = Alignment(horizontal='center', vertical='center')
+    ws['A2'] = "Classification: Absent (0 hrs) | Half Day (>0 to <6 hrs) | Present (>6 hrs) | Sundays Excluded"
     ws['A3'] = f"Report Generated: {datetime.now().strftime('%d/%m/%Y %H:%M')}"
     headers = ['Sr. No', 'User ID', 'Employee Name',
                'Present Days', 'Half Days', 'Absent Days',
-               'Total Hours', 'Avg Hours/Day']
+               'Total Hours (HH:MM)', 'Avg Hours/Day (HH:MM)']
     for col_idx, header_text in enumerate(headers, start=1):
         cell = ws.cell(row=5, column=col_idx)
         cell.value = header_text
@@ -224,8 +225,8 @@ def create_summary_sheet(wb, summary_df, month_name, year):
         ws.cell(row=row_idx, column=4).value = int(emp_row['Present Days'])
         ws.cell(row=row_idx, column=5).value = int(emp_row['Half Days'])
         ws.cell(row=row_idx, column=6).value = int(emp_row['Absent Days'])
-        ws.cell(row=row_idx, column=7).value = emp_row['Total Hours']
-        ws.cell(row=row_idx, column=8).value = emp_row['Avg Hours/Day']
+        ws.cell(row=row_idx, column=7).value = emp_row['Total Hours']     
+        ws.cell(row=row_idx, column=8).value = emp_row['Avg Hours/Day']   
         for c in range(1, 9):
             cell = ws.cell(row=row_idx, column=c)
             cell.border = styles['border']
@@ -240,6 +241,7 @@ def create_summary_sheet(wb, summary_df, month_name, year):
     widths = [8, 14, 26, 14, 12, 12, 18, 20]
     for i, width in enumerate(widths, 1):
         ws.column_dimensions[chr(64 + i)].width = width
+            
 
 def create_daily_attendance_sheet(wb, all_employee_data, month_name, year):
     styles = ExcelStyles.get_styles()
@@ -250,6 +252,7 @@ def create_daily_attendance_sheet(wb, all_employee_data, month_name, year):
     ws['A1'].fill = styles['title_fill']
     ws.merge_cells('A1:H1')
     ws['A1'].alignment = Alignment(horizontal='center', vertical='center')
+    ws['A2'] = "Classification: Absent (0 hrs) | Half Day (>0 to <6 hrs) | Present (>6 hrs) | Sundays Excluded"
     ws['A2'].font = Font(italic=True, size=10)
     headers_daily = ['Employee ID', 'Employee Name', 'Date', 'First IN', 'Last OUT', 'Gross (HH:MM)', 'Status', 'Day']
     for col_idx, header in enumerate(headers_daily, start=1):
@@ -270,7 +273,7 @@ def create_daily_attendance_sheet(wb, all_employee_data, month_name, year):
             ws.cell(row=row_num, column=3).value = dt.strftime('%d-%m-%Y')
             ws.cell(row=row_num, column=4).value = day.get('First IN', '-')
             ws.cell(row=row_num, column=5).value = day.get('Last OUT', '-')
-            ws.cell(row=row_num, column=6).value = day.get('Gross', '00:00')
+            ws.cell(row=row_num, column=6).value = day.get('Gross HHMM', '00:00')
             ws.cell(row=row_num, column=7).value = day.get('Status')
             ws.cell(row=row_num, column=8).value = day.get('Day of Week')
             for c in range(1, 9):
@@ -305,7 +308,8 @@ def create_daily_attendance_sheet(wb, all_employee_data, month_name, year):
     widths = [12, 22, 14, 10, 10, 14, 12, 12]
     for i, width in enumerate(widths, 1):
         ws.column_dimensions[chr(64 + i)].width = width
-
+        
+        
 def create_analysis_sheet(wb, summary_df, month_name, year):
     styles = ExcelStyles.get_styles()
     ws = wb.create_sheet("Analysis & Statistics")
@@ -390,10 +394,9 @@ def create_analysis_sheet(wb, summary_df, month_name, year):
     ws.column_dimensions['A'].width = 35
     ws.column_dimensions['B'].width = 22
 
-############### Streamlit UI #####################
-
 def time_to_hours(t: time):
     return t.hour + t.minute / 60.0
+
 
 st.markdown(
     """
@@ -404,17 +407,21 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
+
 with st.sidebar:
-    st.header("Attendance Settings")
+    st.header("Attendance Classification Settings")
     present_time = st.time_input("Present Threshold (HH:MM)", value=time(6, 0))
     half_day_time = st.time_input("Half Day Threshold (HH:MM)", value=time(0, 0))
     absent_time = st.time_input("Absent Threshold (HH:MM)", value=time(0, 0))
+
 
 present_threshold = time_to_hours(present_time)
 half_day_threshold = time_to_hours(half_day_time)
 absent_threshold = time_to_hours(absent_time)
 
+
 uploaded_file = st.file_uploader("Upload your attendance Excel file", type=["xlsx"])
+
 
 if uploaded_file:
     with st.spinner("Generating report..."):
