@@ -45,19 +45,15 @@ def calculate_gross_minutes_from_in_out(first_in, last_out):
         return lo - fi
     return (24 * 60 - fi) + lo
 
-def classify_attendance(gross_minutes, present_thresh, halfday_thresh, absent_thresh=None):
-    # Consider absent if None or zero or less
+def classify_attendance(gross_minutes, present_thresh, halfday_thresh):
     if gross_minutes is None or gross_minutes <= 0:
         return 'Absent'
-
     gh = gross_minutes / 60.0
-
     if gh > present_thresh:
         return 'Present'
-    elif gh > halfday_thresh:
+    if gh > halfday_thresh:
         return 'Half Day'
-    else:
-        return 'Absent'
+    return 'Absent'
 
 def safe_to_datetime(val):
     try:
@@ -83,7 +79,7 @@ def get_month_year_from_dates(all_employee_data):
         return dt.strftime('%B'), dt.year, dt.month
     return None, None, None
 
-def extract_employee_data(input_file, present_thresh, half_day_thresh, absent_thresh):
+def extract_employee_data(input_file, present_thresh, half_day_thresh):
     df_raw = pd.read_excel(input_file, sheet_name=0, header=None)
     all_employee_data = []
     n_rows, n_cols = df_raw.shape
@@ -135,7 +131,7 @@ def extract_employee_data(input_file, present_thresh, half_day_thresh, absent_th
                 if gross_minutes is None:
                     gm = time_to_minutes(gross_time_cell)
                     gross_minutes = gm if gm is not None else 0
-                status = classify_attendance(gross_minutes, present_thresh, half_day_thresh, absent_thresh)
+                status = classify_attendance(gross_minutes, present_thresh, half_day_thresh)
                 daily_data.append({
                     'Date': date_val,
                     'First IN': first_in if pd.notna(first_in) else '-',
@@ -244,7 +240,6 @@ def create_summary_sheet(wb, summary_df, month_name, year):
     widths = [8, 14, 26, 14, 12, 12, 18, 20]
     for i, width in enumerate(widths, 1):
         ws.column_dimensions[chr(64 + i)].width = width
-            
 
 def create_daily_attendance_sheet(wb, all_employee_data, month_name, year):
     styles = ExcelStyles.get_styles()
@@ -255,7 +250,6 @@ def create_daily_attendance_sheet(wb, all_employee_data, month_name, year):
     ws['A1'].fill = styles['title_fill']
     ws.merge_cells('A1:H1')
     ws['A1'].alignment = Alignment(horizontal='center', vertical='center')
-    ws['A2'].font = Font(italic=True, size=10)
     headers_daily = ['Employee ID', 'Employee Name', 'Date', 'First IN', 'Last OUT', 'Gross (HH:MM)', 'Status', 'Day']
     for col_idx, header in enumerate(headers_daily, start=1):
         cell = ws.cell(row=4, column=col_idx)
@@ -310,8 +304,7 @@ def create_daily_attendance_sheet(wb, all_employee_data, month_name, year):
     widths = [12, 22, 14, 10, 10, 14, 12, 12]
     for i, width in enumerate(widths, 1):
         ws.column_dimensions[chr(64 + i)].width = width
-        
-        
+
 def create_analysis_sheet(wb, summary_df, month_name, year):
     styles = ExcelStyles.get_styles()
     ws = wb.create_sheet("Analysis & Statistics")
@@ -399,7 +392,6 @@ def create_analysis_sheet(wb, summary_df, month_name, year):
 def time_to_hours(t: time):
     return t.hour + t.minute / 60.0
 
-
 st.markdown(
     """
     <h1 style='text-align: center; color: #4B8BBE; font-weight: bold;
@@ -409,27 +401,21 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-
 with st.sidebar:
-    st.header("Attendance Classification Settings")
+    st.header("Attendance Settings")
     present_time = st.time_input("Present Threshold (HH:MM)", value=time(6, 0))
     half_day_time = st.time_input("Half Day Threshold (HH:MM)", value=time(0, 0))
-    absent_time = st.time_input("Absent Threshold (HH:MM)", value=time(0, 0))
-
 
 present_threshold = time_to_hours(present_time)
 half_day_threshold = time_to_hours(half_day_time)
-absent_threshold = time_to_hours(absent_time)
-
 
 uploaded_file = st.file_uploader("Upload your attendance Excel file", type=["xlsx"])
-
 
 if uploaded_file:
     with st.spinner("Generating report..."):
         input_excel = io.BytesIO(uploaded_file.read())
         output = io.BytesIO()
-        all_employee_data = extract_employee_data(input_excel, present_threshold, half_day_threshold, absent_threshold)
+        all_employee_data = extract_employee_data(input_excel, present_threshold, half_day_threshold)
         if not all_employee_data:
             st.error("No employee data found in input file.")
         else:
