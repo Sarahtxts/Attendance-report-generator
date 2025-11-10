@@ -45,15 +45,19 @@ def calculate_gross_minutes_from_in_out(first_in, last_out):
         return lo - fi
     return (24 * 60 - fi) + lo
 
-def classify_attendance(gross_minutes, present_thresh, halfday_thresh, absent_thresh):
-    if gross_minutes is None or gross_minutes/60.0 <= absent_thresh:
+def classify_attendance(gross_minutes, present_thresh, halfday_thresh, absent_thresh=None):
+    # Consider absent if None or zero or less
+    if gross_minutes is None or gross_minutes <= 0:
         return 'Absent'
+
     gh = gross_minutes / 60.0
+
     if gh > present_thresh:
         return 'Present'
-    if gh > halfday_thresh:
+    elif gh > halfday_thresh:
         return 'Half Day'
-    return 'Absent'
+    else:
+        return 'Absent'
 
 def safe_to_datetime(val):
     try:
@@ -206,7 +210,6 @@ def create_summary_sheet(wb, summary_df, month_name, year):
     ws['A1'].fill = styles['title_fill']
     ws.merge_cells('A1:H1')
     ws['A1'].alignment = Alignment(horizontal='center', vertical='center')
-    ws['A2'] = "Classification: Absent (0 hrs) | Half Day (>0 to <6 hrs) | Present (>6 hrs) | Sundays Excluded"
     ws['A3'] = f"Report Generated: {datetime.now().strftime('%d/%m/%Y %H:%M')}"
     headers = ['Sr. No', 'User ID', 'Employee Name',
                'Present Days', 'Half Days', 'Absent Days',
@@ -252,7 +255,6 @@ def create_daily_attendance_sheet(wb, all_employee_data, month_name, year):
     ws['A1'].fill = styles['title_fill']
     ws.merge_cells('A1:H1')
     ws['A1'].alignment = Alignment(horizontal='center', vertical='center')
-    ws['A2'] = "Classification: Absent (0 hrs) | Half Day (>0 to <6 hrs) | Present (>6 hrs) | Sundays Excluded"
     ws['A2'].font = Font(italic=True, size=10)
     headers_daily = ['Employee ID', 'Employee Name', 'Date', 'First IN', 'Last OUT', 'Gross (HH:MM)', 'Status', 'Day']
     for col_idx, header in enumerate(headers_daily, start=1):
