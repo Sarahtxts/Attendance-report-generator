@@ -1,11 +1,11 @@
 import streamlit as st
 import pandas as pd
-import numpy as np
-from datetime import datetime, time
+from datetime import datetime, time, date
 import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 import io
 
+# Constants for Excel columns (update these indexes based on your Excel structure)
 COL_SR_NO = 1
 COL_USER_ID = 2
 COL_NAME = 6
@@ -45,7 +45,15 @@ def calculate_gross_minutes_from_in_out(first_in, last_out):
         return lo - fi
     return (24 * 60 - fi) + lo
 
-def classify_attendance(gross_minutes, present_thresh, halfday_thresh):
+def classify_attendance(gross_minutes, present_thresh, halfday_thresh, employee_department, employee_designation,
+                        sat_departments, sat_designations, gov_holidays, date_val):
+    date_only = date_val.date()
+    if date_only in gov_holidays:
+        return 'Holiday'
+    if (date_val.weekday() == 5 and
+        employee_department in sat_departments and
+        employee_designation in sat_designations):
+        return 'Holiday'
     if gross_minutes is None or gross_minutes <= 0:
         return 'Absent'
     gh = gross_minutes / 60.0
@@ -60,6 +68,9 @@ def safe_to_datetime(val):
         return pd.to_datetime(val, errors='coerce')
     except Exception:
         return pd.NaT
+
+def time_to_hours(t: time):
+    return t.hour + t.minute / 60.0
 
 def get_month_year_from_dates(all_employee_data):
     if all_employee_data:
@@ -79,8 +90,9 @@ def get_month_year_from_dates(all_employee_data):
         return dt.strftime('%B'), dt.year, dt.month
     return None, None, None
 
-def extract_employee_data(input_file, present_thresh, half_day_thresh):
-    df_raw = pd.read_excel(input_file, sheet_name=0, header=None)
+def extract_employee_data(input_file, present_thresh, half_day_thresh,
+                          sat_departments, sat_designations, gov_holidays):
+    df_raw = pd.read_excel(input_file, sheet_name=0, header=None, engine="openpyxl")
     all_employee_data = []
     n_rows, n_cols = df_raw.shape
     for idx in range(n_rows):
@@ -131,7 +143,9 @@ def extract_employee_data(input_file, present_thresh, half_day_thresh):
                 if gross_minutes is None:
                     gm = time_to_minutes(gross_time_cell)
                     gross_minutes = gm if gm is not None else 0
-                status = classify_attendance(gross_minutes, present_thresh, half_day_thresh)
+                status = classify_attendance(gross_minutes, present_thresh, half_day_thresh,
+                                             department, designation, sat_departments,
+                                             sat_designations, gov_holidays, date_val)
                 daily_data.append({
                     'Date': date_val,
                     'First IN': first_in if pd.notna(first_in) else '-',
@@ -151,17 +165,18 @@ def extract_employee_data(input_file, present_thresh, half_day_thresh):
             })
     return all_employee_data
 
+
 def calculate_summary_statistics(all_employee_data):
     summary_data = []
     for emp in all_employee_data:
         daily_data = emp.get('Daily Data', [])
-        working_days_data = [d for d in daily_data if d.get('Day of Week') != 'Sunday']
-        present_count = sum(1 for d in working_days_data if d.get('Status') == 'Present')
-        half_day_count = sum(1 for d in working_days_data if d.get('Status') == 'Half Day')
-        absent_count = sum(1 for d in working_days_data if d.get('Status') == 'Absent')
-        total_minutes = sum(int(d.get('Gross Minutes') or 0) for d in working_days_data)
-        working_days = present_count + half_day_count
-        avg_minutes_per_working_day = int(round(total_minutes / working_days)) if working_days > 0 else 0
+        working_days = [d for d in daily_data if d.get('Day of Week') != 'Sunday' and d.get('Status') != 'Holiday']
+        present_count = sum(1 for d in working_days if d.get('Status') == 'Present')
+        half_day_count = sum(1 for d in working_days if d.get('Status') == 'Half Day')
+        absent_count = sum(1 for d in working_days if d.get('Status') == 'Absent')
+        total_minutes = sum(int(d.get('Gross Minutes') or 0) for d in working_days)
+        working_day_count = present_count + half_day_count
+        avg_minutes_per_day = int(round(total_minutes / working_day_count)) if working_day_count > 0 else 0
         summary_data.append({
             'Sr. No': emp.get('Sr. No'),
             'User ID': emp.get('User ID'),
@@ -171,14 +186,15 @@ def calculate_summary_statistics(all_employee_data):
             'Absent Days': absent_count,
             'Total Minutes': total_minutes,
             'Total Hours': minutes_to_hhmm(total_minutes),
-            'Avg Minutes/Day': avg_minutes_per_working_day,
-            'Avg Hours/Day': minutes_to_hhmm(avg_minutes_per_working_day),
+            'Avg Minutes/Day': avg_minutes_per_day,
+            'Avg Hours/Day': minutes_to_hhmm(avg_minutes_per_day),
         })
     summary_df = pd.DataFrame(summary_data)
     if not summary_df.empty:
         summary_df = summary_df.drop_duplicates(subset=['User ID'], keep='first').reset_index(drop=True)
         summary_df['Sr. No'] = range(1, len(summary_df) + 1)
     return summary_df
+
 
 class ExcelStyles:
     @staticmethod
@@ -193,9 +209,11 @@ class ExcelStyles:
             'present_fill': PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid"),
             'halfday_fill': PatternFill(start_color="FFEB9C", end_color="FFEB9C", fill_type="solid"),
             'absent_fill': PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid"),
+            'holiday_fill': PatternFill(start_color="B7E1CD", end_color="B7E1CD", fill_type="solid"),
             'border': Border(left=Side(style='thin'), right=Side(style='thin'),
                              top=Side(style='thin'), bottom=Side(style='thin'))
         }
+
 
 def create_summary_sheet(wb, summary_df, month_name, year):
     styles = ExcelStyles.get_styles()
@@ -224,8 +242,8 @@ def create_summary_sheet(wb, summary_df, month_name, year):
         ws.cell(row=row_idx, column=4).value = int(emp_row['Present Days'])
         ws.cell(row=row_idx, column=5).value = int(emp_row['Half Days'])
         ws.cell(row=row_idx, column=6).value = int(emp_row['Absent Days'])
-        ws.cell(row=row_idx, column=7).value = emp_row['Total Hours']     
-        ws.cell(row=row_idx, column=8).value = emp_row['Avg Hours/Day']   
+        ws.cell(row=row_idx, column=7).value = emp_row['Total Hours']
+        ws.cell(row=row_idx, column=8).value = emp_row['Avg Hours/Day']
         for c in range(1, 9):
             cell = ws.cell(row=row_idx, column=c)
             cell.border = styles['border']
@@ -241,6 +259,7 @@ def create_summary_sheet(wb, summary_df, month_name, year):
     for i, width in enumerate(widths, 1):
         ws.column_dimensions[chr(64 + i)].width = width
 
+
 def create_daily_attendance_sheet(wb, all_employee_data, month_name, year):
     styles = ExcelStyles.get_styles()
     ws = wb.create_sheet("Daily Attendance")
@@ -250,7 +269,8 @@ def create_daily_attendance_sheet(wb, all_employee_data, month_name, year):
     ws['A1'].fill = styles['title_fill']
     ws.merge_cells('A1:H1')
     ws['A1'].alignment = Alignment(horizontal='center', vertical='center')
-    headers_daily = ['Employee ID', 'Employee Name', 'Date', 'First IN', 'Last OUT', 'Gross (HH:MM)', 'Status', 'Day']
+    headers_daily = ['Employee ID', 'Employee Name', 'Date', 'First IN', 'Last OUT',
+                     'Gross (HH:MM)', 'Status', 'Day']
     for col_idx, header in enumerate(headers_daily, start=1):
         cell = ws.cell(row=4, column=col_idx)
         cell.value = header
@@ -282,6 +302,8 @@ def create_daily_attendance_sheet(wb, all_employee_data, month_name, year):
                 ws.cell(row=row_num, column=7).fill = styles['present_fill']
             elif status == 'Half Day':
                 ws.cell(row=row_num, column=7).fill = styles['halfday_fill']
+            elif status == 'Holiday':
+                ws.cell(row=row_num, column=7).fill = styles['holiday_fill']
             else:
                 ws.cell(row=row_num, column=7).fill = styles['absent_fill']
             row_num += 1
@@ -304,6 +326,8 @@ def create_daily_attendance_sheet(wb, all_employee_data, month_name, year):
     widths = [12, 22, 14, 10, 10, 14, 12, 12]
     for i, width in enumerate(widths, 1):
         ws.column_dimensions[chr(64 + i)].width = width
+
+
 
 def create_analysis_sheet(wb, summary_df, month_name, year):
     styles = ExcelStyles.get_styles()
@@ -389,33 +413,69 @@ def create_analysis_sheet(wb, summary_df, month_name, year):
     ws.column_dimensions['A'].width = 35
     ws.column_dimensions['B'].width = 22
 
-def time_to_hours(t: time):
-    return t.hour + t.minute / 60.0
 
+# Streamlit UI Logic
+st.set_page_config(page_title="Attendance Report", layout="wide", initial_sidebar_state="expanded")
 st.markdown(
     """
     <h1 style='text-align: center; color: #4B8BBE; font-weight: bold;
     font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;'>BOW AND BAAN ATTENDANCE</h1>
     <hr style='border: 1px solid #BBB;'/>
-    """,
-    unsafe_allow_html=True,
-)
+    """, unsafe_allow_html=True)
+
+uploaded_file = st.file_uploader("Upload your attendance Excel file", type=["xlsx"])
 
 with st.sidebar:
-    st.header("Attendance Settings")
-    present_time = st.time_input("Present Threshold (HH:MM)", value=time(6, 0))
-    half_day_time = st.time_input("Half Day Threshold (HH:MM)", value=time(0, 0))
+    st.header("Settings")
+    present_time = st.time_input("Present Threshold (Clock)", value=time(8, 0))
+    half_day_time = st.time_input("Half Day Threshold (Clock)", value=time(4, 0))
+
+    departments = []
+    designations = []
+    if uploaded_file:
+        # Use uploaded_file directly in read_excel without re-wrapping
+        df_raw = pd.read_excel(uploaded_file, header=None, engine="openpyxl")
+        departments = df_raw[COL_DEPARTMENT].dropna().unique().tolist()
+        designations = df_raw[COL_DESIGNATION].dropna().unique().tolist()
+        st.session_state['departments'] = departments
+        st.session_state['designations'] = designations
+    else:
+        departments = st.session_state.get('departments', [])
+        designations = st.session_state.get('designations', [])
+
+    sat_departments = st.multiselect("Departments with Saturday Off", departments, key="sat_dept")
+    sat_designations = st.multiselect("Designations with Saturday Off", designations, key="sat_des")
+
+    st.markdown("#### :calendar: Government Holidays")
+    if "gov_holiday_dates" not in st.session_state:
+        st.session_state["gov_holiday_dates"] = []
+    new_holiday = st.date_input("Select a holiday date", value=date.today())
+    add_holiday = st.button("➕ Add Holiday")
+    clear_holidays = st.button("🗑️ Clear All")
+    if add_holiday and new_holiday and new_holiday not in st.session_state["gov_holiday_dates"]:
+        st.session_state["gov_holiday_dates"].append(new_holiday)
+    if clear_holidays:
+        st.session_state["gov_holiday_dates"] = []
+
+    gov_holidays = set(st.session_state["gov_holiday_dates"])
+
+    st.write("Selected Holidays:", sorted(str(d) for d in gov_holidays))
+
 
 present_threshold = time_to_hours(present_time)
 half_day_threshold = time_to_hours(half_day_time)
 
-uploaded_file = st.file_uploader("Upload your attendance Excel file", type=["xlsx"])
 
-if uploaded_file:
+if uploaded_file and st.button("Generate Attendance Report"):
     with st.spinner("Generating report..."):
-        input_excel = io.BytesIO(uploaded_file.read())
-        output = io.BytesIO()
-        all_employee_data = extract_employee_data(input_excel, present_threshold, half_day_threshold)
+        all_employee_data = extract_employee_data(
+            uploaded_file,
+            present_threshold,
+            half_day_threshold,
+            st.session_state.get('sat_dept', []),
+            st.session_state.get('sat_des', []),
+            gov_holidays
+        )
         if not all_employee_data:
             st.error("No employee data found in input file.")
         else:
@@ -426,6 +486,7 @@ if uploaded_file:
             create_summary_sheet(wb, summary_df, month_name, year)
             create_daily_attendance_sheet(wb, all_employee_data, month_name, year)
             create_analysis_sheet(wb, summary_df, month_name, year)
+            output = io.BytesIO()
             wb.save(output)
             output.seek(0)
             st.success("Report generated successfully!")
